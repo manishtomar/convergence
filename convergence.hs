@@ -1,11 +1,13 @@
 import Data.Time.Clock (UTCTime, NominalDiffTime, diffUTCTime)
 import Data.List (sortBy, find)
 import Data.Ord (comparing)
-import Data.Maybe (isJust, fromJust)
 import Data.HashMap.Lazy (fromList, toList, difference)
 
 
 type UUID = String
+
+-- | The CLB and Nova model corresponds to model defined in
+-- https://github.com/rackerlabs/otter/blob/master/otter/convergence/model.py
 
 -- CLB model
 
@@ -55,6 +57,8 @@ type DesiredGroupState = (LaunchConfig, Int, DesiredCLBConfigs, NominalDiffTime,
 
 type RealGroupState = ([NovaServer], [CLBNode], UTCTime)
 
+-- | This corresponds to steps defined in
+-- https://github.com/rackerlabs/otter/blob/master/otter/convergence/steps.py
 data Step
     = CreateServer LaunchConfig
     | DeleteServer ServerID
@@ -75,11 +79,13 @@ buildTooLong timeout now server = diffUTCTime now (created server) > timeout
 
 isError server = state server == Error
 
-nodeByAddress :: [CLBNode] -> NovaServer -> Maybe CLBNode
-nodeByAddress nodes server = find (\n -> address n == servicenetAddress server) nodes
+-- a predicate to filter nodes of a server based on its address
+serverNodes server = \n -> address n == servicenetAddress server
 
+-- | returns steps to move given servers to desired CLB configs
 clbSteps :: DesiredCLBConfigs -> [NovaServer] -> [CLBNode] -> NominalDiffTime -> [Step]
-clbSteps lbs servers nodes timeout = []
+clbSteps lbs servers nodes timeout = concat $ map serverSteps servers
+    where serverSteps s = serverClbSteps lbs (filter (serverNodes s) nodes) timeout (servicenetAddress s)
 
 -- | returns steps to move given IPAddress (of a server) to desired CLBs
 serverClbSteps :: DesiredCLBConfigs -> [CLBNode] -> NominalDiffTime -> IPAddress -> [Step]
@@ -89,6 +95,8 @@ serverClbSteps lbConfigs nodes draining ip =
     in [AddNodeToCLB cid ip conf | ((cid, _), conf) <- toList $ difference desired actual] ++
        [RemoveNodeFromCLB cid (nodeId node) | ((cid, _), node) <- toList $ difference actual desired]
 
+-- converge function in
+-- https://github.com/rackerlabs/otter/blob/master/otter/convergence/planning.py
 converge :: DesiredGroupState -> RealGroupState -> [Step]
 converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now) = 
     -- TODO: Use Set instead
@@ -99,6 +107,5 @@ converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now)
     in [CreateServer lc | _ <- [0..(desired - valid)]] ++ 
        [DeleteServer (getId s) | s <- deletingServers] ++
        [RemoveNodeFromCLB (lbId node) (nodeId node) 
-            | s <- deletingServers, let maybeNode = nodeByAddress nodes s, 
-              isJust maybeNode, let node = fromJust maybeNode] ++
+            | s <- deletingServers, node <- filter (serverNodes s) nodes] ++
        clbSteps lbs (filter (`notElem` deletingServers) servers) nodes drainingTimeout

@@ -10,3 +10,4 @@ TODO:
 
 - CLB draining
 - RCv3 - common code for both LBs as it is currently being `worked <https://github.com/rackerlabs/otter/issues/821>`_ on
+- Tests

@@ -84,23 +84,28 @@ buildTooLong timeout now server = diffUTCTime now (created server) > timeout
 -- is server in ERROR state
 isError server = state server == Error
 
--- a predicate to filter nodes of a server based on its address
-serverNodes server = \n -> address n == servicenetAddress server
+-- filter nodes of a server based on its address
+serverNodes server = filter (\n -> address n == servicenetAddress server)
+
+-- drain and delete server by putting it in draining first if needed, otherwise
+-- delete server and corresponding node
+drainAndDelete :: NovaServer -> CLBNode -> NominalDiffTime -> UTCTime -> [Step]
+drainAndDelete server node draining now = []
 
 -- | returns steps to move given servers to desired CLB configs
-clbSteps :: DesiredCLBConfigs -> [NovaServer] -> [CLBNode] -> NominalDiffTime -> [Step]
-clbSteps lbs servers nodes timeout = concat $ map serverSteps servers
-    where serverSteps s = serverClbSteps lbs (filter (serverNodes s) nodes) timeout (servicenetAddress s)
+clbSteps :: DesiredCLBConfigs -> [NovaServer] -> [CLBNode] -> [Step]
+clbSteps lbs servers nodes = concat $ map serverSteps servers
+    where serverSteps s = serverClbSteps lbs (serverNodes s nodes) (servicenetAddress s)
 
 -- | returns steps to move given IPAddress (of a server) to desired CLBs
-serverClbSteps :: DesiredCLBConfigs -> [CLBNode] -> NominalDiffTime -> IPAddress -> [Step]
-serverClbSteps lbConfigs nodes draining ip = 
+serverClbSteps :: DesiredCLBConfigs -> [CLBNode] -> IPAddress -> [Step]
+serverClbSteps lbConfigs nodes ip =
     let desired = HM.fromList [((cid, port conf), conf) | (cid, confs) <- lbConfigs, conf <- confs]
         actual = HM.fromList [((lbId node, port $ config node), node) | node <- nodes]
     in [AddNodeToCLB cid ip conf
             | ((cid, _), conf) <- HM.toList $ HM.difference desired actual] ++
-       [RemoveNodeFromCLB cid (nodeId node)
-            | ((cid, _), node) <- HM.toList $ HM.difference actual desired] ++
+       [RemoveNodeFromCLB (lbId node) (nodeId node)
+            | node <- HM.elems $ HM.difference actual desired] ++
        [ChangeCLBNode cid (nodeId node) (weight conf) (condition conf)
             | ((cid, port), node) <- HM.toList $ HM.intersection actual desired,
               let conf = fromJust $ HM.lookup (cid, port) desired, conf /= config node]
@@ -113,9 +118,11 @@ converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now)
     let unwanted = filter (any_preds [isError, buildTooLong buildTimeout now]) servers
         valid = length servers - length unwanted
         active = filter (`notElem` unwanted) servers
-        deletingServers = unwanted ++ take (valid - desired) (sortBy (comparing created) active)
+        remove = take (valid - desired) (sortBy (comparing created) active)
     in [CreateServer lc | _ <- [0..(desired - valid)]] ++ 
-       [DeleteServer (getId s) | s <- deletingServers] ++
+       [DeleteServer (getId s) | s <- unwanted] ++
        [RemoveNodeFromCLB (lbId node) (nodeId node) 
-            | s <- deletingServers, node <- filter (serverNodes s) nodes] ++
-       clbSteps lbs (filter (`notElem` deletingServers) servers) nodes drainingTimeout
+            | s <- unwanted, node <- serverNodes s nodes] ++
+       concat ([drainAndDelete s node drainingTimeout now
+                    | s <- remove, node <- serverNodes s nodes]) ++
+       clbSteps lbs (filter (`notElem` unwanted ++ remove) servers) nodes

@@ -16,14 +16,14 @@ type IPAddress = String
 type CLBID = String
 type NodeID = String
 
+data NodeCondition = Enabled | NodeDraining | Disabled deriving (Eq, Show)
+
 data CLBConfig = CLBConfig 
     { port :: Int, 
       weight :: Int, 
-      condition :: Int
+      condition :: NodeCondition
     } deriving (Eq, Show)
 
-data NodeCondition = Enabled | NodeDraining | Disabled
-data NodeType = Primary | Secondary
 data CLBNode = CLBNode 
     { lbId :: CLBID,
       nodeId :: NodeID,
@@ -67,8 +67,8 @@ data Step
     | AddNodeToCLB CLBID IPAddress CLBConfig
     | RemoveNodeFromCLB CLBID NodeID
     | ChangeCLBNode CLBID NodeID
-                    Int -- weight
-                    Int -- condition
+                    Int             -- weight
+                    NodeCondition   -- condition
 
 
 -- | converge implementation

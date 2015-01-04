@@ -90,7 +90,16 @@ serverNodes server = filter (\n -> address n == servicenetAddress server)
 -- drain and delete server by putting it in draining first if needed, otherwise
 -- delete server and corresponding node
 drainAndDelete :: NovaServer -> CLBNode -> NominalDiffTime -> UTCTime -> [Step]
-drainAndDelete server node draining now = []
+drainAndDelete server node timeout now =
+    if condition (config node) == NodeDraining
+    then case connections node of
+        Just conn -> if conn == 0 then deleteBoth else deleteIfTimedout
+        Nothing -> deleteIfTimedout
+    else [ChangeCLBNode (lbId node) (nodeId node) (weight $ config node) NodeDraining,
+          SetMetadataOnServer (getId server) "rax:auto_scaling_draining" "draining"]
+    where deleteBoth = [RemoveNodeFromCLB (lbId node) (nodeId node), DeleteServer (getId server)]
+          deleteIfTimedout = if diffUTCTime now (drainedAt node) > timeout
+                             then deleteBoth else []
 
 -- | returns steps to move given servers to desired CLB configs
 clbSteps :: DesiredCLBConfigs -> [NovaServer] -> [CLBNode] -> [Step]

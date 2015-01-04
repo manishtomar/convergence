@@ -1,7 +1,8 @@
 import Data.Time.Clock (UTCTime, NominalDiffTime, diffUTCTime)
 import Data.List (sortBy, find)
 import Data.Ord (comparing)
-import Data.HashMap.Lazy (fromList, toList, difference)
+import Data.Maybe (fromJust)
+import qualified Data.HashMap.Lazy as HM
 
 
 type UUID = String
@@ -65,7 +66,9 @@ data Step
     | SetMetadataOnServer ServerID String String
     | AddNodeToCLB CLBID IPAddress CLBConfig
     | RemoveNodeFromCLB CLBID NodeID
-    | ChangeCLBNode CLBID NodeID Int Int
+    | ChangeCLBNode CLBID NodeID
+                    Int -- weight
+                    Int -- condition
 
 
 -- | converge implementation
@@ -75,8 +78,10 @@ data Step
 any_preds :: [a -> Bool] -> a -> Bool
 any_preds ps = \x -> or $ map (\p -> p x) ps
 
+-- is the server building for long time?
 buildTooLong timeout now server = diffUTCTime now (created server) > timeout
 
+-- is server in ERROR state
 isError server = state server == Error
 
 -- a predicate to filter nodes of a server based on its address
@@ -90,10 +95,15 @@ clbSteps lbs servers nodes timeout = concat $ map serverSteps servers
 -- | returns steps to move given IPAddress (of a server) to desired CLBs
 serverClbSteps :: DesiredCLBConfigs -> [CLBNode] -> NominalDiffTime -> IPAddress -> [Step]
 serverClbSteps lbConfigs nodes draining ip = 
-    let desired = fromList [((cid, port conf), conf) | (cid, confs) <- lbConfigs, conf <- confs]
-        actual = fromList [((lbId node, port $ config node), node) | node <- nodes]
-    in [AddNodeToCLB cid ip conf | ((cid, _), conf) <- toList $ difference desired actual] ++
-       [RemoveNodeFromCLB cid (nodeId node) | ((cid, _), node) <- toList $ difference actual desired]
+    let desired = HM.fromList [((cid, port conf), conf) | (cid, confs) <- lbConfigs, conf <- confs]
+        actual = HM.fromList [((lbId node, port $ config node), node) | node <- nodes]
+    in [AddNodeToCLB cid ip conf
+            | ((cid, _), conf) <- HM.toList $ HM.difference desired actual] ++
+       [RemoveNodeFromCLB cid (nodeId node)
+            | ((cid, _), node) <- HM.toList $ HM.difference actual desired] ++
+       [ChangeCLBNode cid (nodeId node) (weight conf) (condition conf)
+            | ((cid, port), node) <- HM.toList $ HM.intersection actual desired,
+              let conf = fromJust $ HM.lookup (cid, port) desired, conf /= config node]
 
 -- converge function in
 -- https://github.com/rackerlabs/otter/blob/master/otter/convergence/planning.py

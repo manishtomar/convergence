@@ -134,4 +134,4 @@ converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now)
             | s <- unwanted, node <- serverNodes s nodes] ++
        concat ([drainAndDelete s node drainingTimeout now
                     | s <- remove, node <- serverNodes s nodes]) ++
-       clbSteps lbs (filter (`notElem` unwanted ++ remove) servers) nodes
+       clbSteps lbs (filter (`notElem` (unwanted ++ remove)) servers) nodes

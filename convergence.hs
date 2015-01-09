@@ -111,7 +111,7 @@ drain server node timeout now =
 
 -- | returns steps to move given servers to desired CLB configs
 clbSteps :: DesiredCLBConfigs -> [NovaServer] -> [CLBNode] -> [Step]
-clbSteps lbs servers nodes = concat $ map serverSteps servers
+clbSteps lbs servers nodes = concatMap serverSteps servers
     where serverSteps s = serverClbSteps lbs (serverNodes s nodes) (servicenetAddress s)
 
 -- | returns steps to move given IPAddress (of a server) to desired CLBs

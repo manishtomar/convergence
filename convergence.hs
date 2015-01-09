@@ -69,6 +69,7 @@ data Step
     | ChangeCLBNode CLBID NodeID
                     Int             -- weight
                     NodeCondition   -- condition
+    deriving (Eq, Show)
 
 
 -- | converge implementation
@@ -87,19 +88,26 @@ isError server = state server == Error
 -- filter nodes of a server based on its address
 serverNodes server = filter (\n -> address n == servicenetAddress server)
 
--- drain and delete server by putting it in draining first if needed, otherwise
--- delete server and corresponding node
-drainAndDelete :: NovaServer -> CLBNode -> NominalDiffTime -> UTCTime -> [Step]
-drainAndDelete server node timeout now =
+-- drain server and nodes and finally delete server too if all the nodes are removed
+drainAndDelete :: NovaServer -> [CLBNode] -> NominalDiffTime -> UTCTime -> [Step]
+drainAndDelete server nodes timeout now =
+    let steps = concatMap (\n -> drain server n timeout now) nodes
+        removes = [RemoveNodeFromCLB (lbId node) (nodeId node) | node <- nodes]
+    in steps ++ if steps == removes then [DeleteServer (getId server)] else []
+
+-- drain server and corresponding node if required otherwise delete the node
+drain :: NovaServer -> CLBNode -> NominalDiffTime -> UTCTime -> [Step]
+drain server node timeout now =
+    -- TODO: delete node if disabled
     if condition (config node) == NodeDraining
     then case connections node of
-        Just conn -> if conn == 0 then deleteBoth else deleteIfTimedout
+        Just conn -> if conn == 0 then delete else deleteIfTimedout
         Nothing -> deleteIfTimedout
     else [ChangeCLBNode (lbId node) (nodeId node) (weight $ config node) NodeDraining,
           SetMetadataOnServer (getId server) "rax:auto_scaling_draining" "draining"]
-    where deleteBoth = [RemoveNodeFromCLB (lbId node) (nodeId node), DeleteServer (getId server)]
+    where delete = [RemoveNodeFromCLB (lbId node) (nodeId node)]
           deleteIfTimedout = if diffUTCTime now (drainedAt node) > timeout
-                             then deleteBoth else []
+                             then delete else []
 
 -- | returns steps to move given servers to desired CLB configs
 clbSteps :: DesiredCLBConfigs -> [NovaServer] -> [CLBNode] -> [Step]
@@ -132,6 +140,5 @@ converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now)
        [DeleteServer (getId s) | s <- unwanted] ++
        [RemoveNodeFromCLB (lbId node) (nodeId node) 
             | s <- unwanted, node <- serverNodes s nodes] ++
-       concat ([drainAndDelete s node drainingTimeout now
-                    | s <- remove, node <- serverNodes s nodes]) ++
+       concatMap (\s -> drainAndDelete s (serverNodes s nodes) drainingTimeout now) remove ++
        clbSteps lbs (filter (`notElem` (unwanted ++ remove)) servers) nodes

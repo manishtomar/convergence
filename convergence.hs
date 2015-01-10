@@ -54,9 +54,15 @@ instance Eq NovaServer where
 
 type DesiredCLBConfigs = [(CLBID, [CLBConfig])]
 
-type DesiredGroupState = (LaunchConfig, Int, DesiredCLBConfigs, NominalDiffTime, NominalDiffTime)
+type DesiredGroupState = (LaunchConfig,         -- launch config used to create servers
+                          Int,                  -- desired number of servers
+                          DesiredCLBConfigs,    -- CLB configurations
+                          NominalDiffTime,      -- draining timeout
+                          NominalDiffTime)      -- build timeout
 
-type RealGroupState = ([NovaServer], [CLBNode], UTCTime)
+type RealGroupState = ([NovaServer],    -- current list of servers
+                       [CLBNode],       -- current list of all CLB's all Nodes
+                       UTCTime)         -- current time
 
 -- | This corresponds to steps defined in
 -- https://github.com/rackerlabs/otter/blob/master/otter/convergence/steps.py

@@ -69,7 +69,6 @@ type RealGroupState = ([NovaServer],    -- current list of servers
 data Step
     = CreateServer LaunchConfig
     | DeleteServer ServerID
-    | SetMetadataOnServer ServerID String String
     | AddNodeToCLB CLBID IPAddress CLBConfig
     | RemoveNodeFromCLB CLBID NodeID
     | ChangeCLBNode CLBID NodeID
@@ -109,8 +108,7 @@ drain server node timeout now =
         NodeDraining -> case connections node of
                             Just conn -> if conn == 0 then delete else deleteIfTimedout
                             Nothing -> deleteIfTimedout
-        Enabled -> [ChangeCLBNode (lbId node) (nodeId node) (weight $ config node) NodeDraining,
-                    SetMetadataOnServer (getId server) "rax:auto_scaling_draining" "draining"]
+        Enabled -> [ChangeCLBNode (lbId node) (nodeId node) (weight $ config node) NodeDraining]
     where delete = [RemoveNodeFromCLB (lbId node) (nodeId node)]
           deleteIfTimedout = if diffUTCTime now (drainedAt node) > timeout
                              then delete else []

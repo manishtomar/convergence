@@ -98,13 +98,13 @@ drainAndDelete server nodes timeout now =
 -- drain server and corresponding node if required otherwise delete the node
 drain :: NovaServer -> CLBNode -> NominalDiffTime -> UTCTime -> [Step]
 drain server node timeout now =
-    -- TODO: delete node if disabled
-    if condition (config node) == NodeDraining
-    then case connections node of
-        Just conn -> if conn == 0 then delete else deleteIfTimedout
-        Nothing -> deleteIfTimedout
-    else [ChangeCLBNode (lbId node) (nodeId node) (weight $ config node) NodeDraining,
-          SetMetadataOnServer (getId server) "rax:auto_scaling_draining" "draining"]
+    case condition (config node) of
+        Disabled -> delete
+        NodeDraining -> case connections node of
+                            Just conn -> if conn == 0 then delete else deleteIfTimedout
+                            Nothing -> deleteIfTimedout
+        Enabled -> [ChangeCLBNode (lbId node) (nodeId node) (weight $ config node) NodeDraining,
+                    SetMetadataOnServer (getId server) "rax:auto_scaling_draining" "draining"]
     where delete = [RemoveNodeFromCLB (lbId node) (nodeId node)]
           deleteIfTimedout = if diffUTCTime now (drainedAt node) > timeout
                              then delete else []

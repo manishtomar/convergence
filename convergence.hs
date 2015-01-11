@@ -138,11 +138,11 @@ converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now)
     -- TODO: Use Set instead
     let unwanted = filter (any_preds [isError, buildTooLong buildTimeout now]) servers
         valid = length servers - length unwanted
-        active = filter (`notElem` unwanted) servers
-        remove = take (valid - desired) (sortBy (comparing created) active)
+        decent = filter (`notElem` unwanted) servers
+        (remove, inGroup) = splitAt (valid - desired) (sortBy (comparing created) decent)
     in [CreateServer lc | _ <- [0..(desired - valid)]] ++ 
        [DeleteServer (getId s) | s <- unwanted] ++
        [RemoveNodeFromCLB (lbId node) (nodeId node) 
             | s <- unwanted, node <- serverNodes s nodes] ++
        concatMap (\s -> drainAndDelete s (serverNodes s nodes) drainingTimeout now) remove ++
-       clbSteps lbs (filter (`notElem` (unwanted ++ remove)) servers) nodes
+       clbSteps lbs (filter (\s -> state s == Active) inGroup) nodes

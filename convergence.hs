@@ -38,7 +38,7 @@ data CLBNode = CLBNode
 type LaunchConfig = String  -- for now
 type ServerID = UUID
 
-data ServerState = Active | Error | Build | ServerDraining deriving Eq
+data ServerState = Active | Error | Build deriving Eq
 
 data NovaServer = NovaServer 
     { getId :: ServerID,

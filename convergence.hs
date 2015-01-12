@@ -38,7 +38,7 @@ data CLBNode = CLBNode
 type LaunchConfig = String  -- for now
 type ServerID = UUID
 
-data ServerState = Active | Error | Build deriving Eq
+data ServerState = Active | Error | Build | Draining deriving Eq
 
 data NovaServer = NovaServer 
     { getId :: ServerID,
@@ -69,6 +69,7 @@ type RealGroupState = ([NovaServer],    -- current list of servers
 data Step
     = CreateServer LaunchConfig
     | DeleteServer ServerID
+    | SetMetadataOnServer ServerID String String
     | AddNodeToCLB CLBID IPAddress CLBConfig
     | RemoveNodeFromCLB CLBID NodeID
     | ChangeCLBNode CLBID NodeID
@@ -79,16 +80,15 @@ data Step
 
 -- | converge implementation
 
--- | 'any_preds' takes list of predicates and return predicate that returns
--- true if any of the predicates return true
-any_preds :: [a -> Bool] -> a -> Bool
-any_preds ps = \x -> or $ map (\p -> p x) ps
+-- por combines 2 predicates with or operator
+por :: (a -> Bool) -> (a -> Bool) -> a -> Bool
+por p1 p2 = \x -> or [p1 x, p2 x]
 
 -- is the server building for long time?
 buildTooLong timeout now server = diffUTCTime now (created server) > timeout
 
--- is server in ERROR state
-isError server = state server == Error
+-- is server in given state
+isState st server = state server == st
 
 -- filter nodes of a server based on its address
 serverNodes server = filter (\n -> address n == servicenetAddress server)
@@ -109,9 +109,11 @@ drain server node timeout now =
                             Just conn -> if conn == 0 then delete else deleteIfTimedout
                             Nothing -> deleteIfTimedout
         Enabled -> [ChangeCLBNode (lbId node) (nodeId node) (weight $ config node) NodeDraining]
+                   ++ if state server /= Draining then [sm] else []
     where delete = [RemoveNodeFromCLB (lbId node) (nodeId node)]
           deleteIfTimedout = if diffUTCTime now (drainedAt node) > timeout
                              then delete else []
+          sm = SetMetadataOnServer (getId server) "rax:auto_scaling_draining" "draining"
 
 -- | returns steps to move given servers to desired CLB configs
 clbSteps :: DesiredCLBConfigs -> [NovaServer] -> [CLBNode] -> [Step]
@@ -136,13 +138,15 @@ serverClbSteps lbConfigs nodes ip =
 converge :: DesiredGroupState -> RealGroupState -> [Step]
 converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now) = 
     -- TODO: Use Set instead
-    let unwanted = filter (any_preds [isError, buildTooLong buildTimeout now]) servers
-        valid = length servers - length unwanted
-        decent = filter (`notElem` unwanted) servers
-        (remove, inGroup) = splitAt (valid - desired) (sortBy (comparing created) decent)
+    let unwanted = isState Error `por` buildTooLong buildTimeout now
+        draining = isState Draining
+        validServers = filter (not . (unwanted `por` draining)) servers
+        valid = length validServers
+        (remove, inGroup) = splitAt (valid - desired) (sortBy (comparing created) validServers)
     in [CreateServer lc | _ <- [0..(desired - valid)]] ++ 
-       [DeleteServer (getId s) | s <- unwanted] ++
+       [DeleteServer (getId s) | s <- filter unwanted servers] ++
        [RemoveNodeFromCLB (lbId node) (nodeId node) 
-            | s <- unwanted, node <- serverNodes s nodes] ++
-       concatMap (\s -> drainAndDelete s (serverNodes s nodes) drainingTimeout now) remove ++
-       clbSteps lbs (filter (\s -> state s == Active) inGroup) nodes
+            | s <- filter unwanted servers, node <- serverNodes s nodes] ++
+       concatMap drainDeleteServer (remove ++ filter draining servers) ++
+       clbSteps lbs (filter (isState Active) inGroup) nodes
+    where drainDeleteServer = \s -> drainAndDelete s (serverNodes s nodes) drainingTimeout now

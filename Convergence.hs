@@ -1,5 +1,7 @@
+module Convergence where
+
 import Data.Time.Clock (UTCTime, NominalDiffTime, diffUTCTime)
-import Data.List (sortBy, find)
+import Data.List (sortBy)
 import Data.Ord (comparing)
 import Data.Maybe (fromJust)
 import qualified Data.HashMap.Lazy as HM
@@ -19,7 +21,7 @@ type NodeID = String
 data NodeCondition = Enabled | NodeDraining | Disabled deriving (Eq, Show)
 
 data CLBConfig = CLBConfig 
-    { port :: Int, 
+    { getPort :: Int, 
       weight :: Int, 
       condition :: NodeCondition
     } deriving (Eq, Show)
@@ -85,12 +87,15 @@ por :: (a -> Bool) -> (a -> Bool) -> a -> Bool
 por p1 p2 = \x -> or [p1 x, p2 x]
 
 -- is the server building for long time?
+buildTooLong :: NominalDiffTime -> UTCTime -> NovaServer -> Bool
 buildTooLong timeout now server = diffUTCTime now (created server) > timeout
 
 -- is server in given state
+isState :: ServerState -> NovaServer -> Bool
 isState st server = state server == st
 
 -- filter nodes of a server based on its address
+serverNodes :: NovaServer -> [CLBNode] -> [CLBNode]
 serverNodes server = filter (\n -> address n == servicenetAddress server)
 
 -- drain server and nodes and finally delete server too if all the nodes are removed
@@ -123,8 +128,8 @@ clbSteps lbs servers nodes = concatMap serverSteps servers
 -- | returns steps to move given IPAddress (of a server) to desired CLBs
 serverClbSteps :: DesiredCLBConfigs -> [CLBNode] -> IPAddress -> [Step]
 serverClbSteps lbConfigs nodes ip =
-    let desired = HM.fromList [((cid, port conf), conf) | (cid, confs) <- lbConfigs, conf <- confs]
-        actual = HM.fromList [((lbId node, port $ config node), node) | node <- nodes]
+    let desired = HM.fromList [((cid, getPort conf), conf) | (cid, confs) <- lbConfigs, conf <- confs]
+        actual = HM.fromList [((lbId node, getPort $ config node), node) | node <- nodes]
     in [AddNodeToCLB cid ip conf
             | ((cid, _), conf) <- HM.toList $ HM.difference desired actual] ++
        [RemoveNodeFromCLB (lbId node) (nodeId node)

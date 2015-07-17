@@ -42,13 +42,6 @@ type ServerID = UUID
 
 data ServerState = Active | Error | Build | Draining deriving Eq
 
-data NovaServer = NovaServer 
-    { getId :: ServerID,
-      state :: ServerState,
-      created :: UTCTime,
-      servicenetAddress :: IPAddress
-    }
-
 instance Eq NovaServer where
     (==) s1 s2 = getId s1 == getId s2
 
@@ -56,9 +49,16 @@ instance Eq NovaServer where
 
 type DesiredCLBConfigs = [(CLBID, [CLBConfig])]
 
+data NovaServer = NovaServer
+    { getId :: ServerID,
+      state :: ServerState,
+      created :: UTCTime,
+      servicenetAddress :: IPAddress,
+      desired_clbs :: DesiredCLBConfigs
+    }
+
 type DesiredGroupState = (LaunchConfig,         -- launch config used to create servers
                           Int,                  -- desired number of servers
-                          DesiredCLBConfigs,    -- CLB configurations
                           NominalDiffTime,      -- draining timeout
                           NominalDiffTime)      -- build timeout
 
@@ -120,10 +120,10 @@ drain server node timeout now =
                              then delete else []
           sm = SetMetadataOnServer (getId server) "rax:auto_scaling_draining" "draining"
 
--- | returns steps to move given servers to desired CLB configs
-clbSteps :: DesiredCLBConfigs -> [NovaServer] -> [CLBNode] -> [Step]
-clbSteps lbs servers nodes = concatMap serverSteps servers
-    where serverSteps s = serverClbSteps lbs (serverNodes s nodes) (servicenetAddress s)
+-- | returns steps to move given servers to their desired CLB configs
+clbSteps :: [NovaServer] -> [CLBNode] -> [Step]
+clbSteps servers nodes = concatMap serverSteps servers
+    where serverSteps s = serverClbSteps (desired_clbs s) (serverNodes s nodes) (servicenetAddress s)
 
 -- | returns steps to move given IPAddress (of a server) to desired CLBs
 serverClbSteps :: DesiredCLBConfigs -> [CLBNode] -> IPAddress -> [Step]
@@ -141,7 +141,7 @@ serverClbSteps lbConfigs nodes ip =
 -- converge function in
 -- https://github.com/rackerlabs/otter/blob/master/otter/convergence/planning.py
 converge :: DesiredGroupState -> RealGroupState -> [Step]
-converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now) = 
+converge (lc, desired, drainingTimeout, buildTimeout) (servers, nodes, now) =
     -- TODO: Use Set instead
     let unwanted = isState Error `por` buildTooLong buildTimeout now
         draining = isState Draining
@@ -153,5 +153,5 @@ converge (lc, desired, lbs, drainingTimeout, buildTimeout) (servers, nodes, now)
        [RemoveNodeFromCLB (lbId node) (nodeId node) 
             | s <- filter unwanted servers, node <- serverNodes s nodes] ++
        concatMap drainDeleteServer (remove ++ filter draining servers) ++
-       clbSteps lbs (filter (isState Active) inGroup) nodes
-    where drainDeleteServer = \s -> drainAndDelete s (serverNodes s nodes) drainingTimeout now
+       clbSteps (filter (isState Active) inGroup) nodes
+    where drainDeleteServer s = drainAndDelete s (serverNodes s nodes) drainingTimeout now
